@@ -4,6 +4,14 @@
 
 # DriftDetectionStudy — Reproducibility Package
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.9%2B-4a5261?style=flat-square" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/Snowflake-Cortex%20AI-4a5261?style=flat-square" alt="Snowflake Cortex AI">
+  <img src="https://img.shields.io/badge/IEEE%20Access-submitted-4a5261?style=flat-square" alt="IEEE Access: submitted">
+  <img src="https://img.shields.io/badge/reproduction-~%24250-4a5261?style=flat-square" alt="Full reproduction cost ~$250">
+  <img src="https://img.shields.io/badge/corpus-synthetic-4a5261?style=flat-square" alt="Corpus: synthetic">
+</p>
+
 Companion repository for:
 
 > **What Kind of Drift Determines Which Signal Sees It: A Cost-Normalized,
