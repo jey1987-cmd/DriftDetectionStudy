@@ -1,7 +1,3 @@
-# Generated corpus data — regenerate via generate_311_corpus.py, don't commit
-corpus/
-*.jsonl
-
 # Snowflake / environment credentials — never commit these
 .env
 *.pem

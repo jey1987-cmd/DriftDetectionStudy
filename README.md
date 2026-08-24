@@ -18,11 +18,13 @@ Snowflake account.
 
 | File | Purpose |
 |---|---|
-| `generate_311_corpus.py` | Synthetic municipal-311 corpus generator with drift injection (arms B, C, D) |
-| `classify_calibration.sql` | Zero-shot classification of the reference window (days 15–34) |
-| `drift_signals.sql` | Tier 1 (S1–S3) and Tier 3 (S7a) signal computation |
-| `tier2_arm_c_full.sql` | Tier 2 (S4–S6) embedding pipeline, template for all arms |
-| `SETUP.md` | This file |
+| `python/generate_311_corpus.py` | Synthetic municipal-311 corpus generator with drift injection (arms B, C, D) |
+| `python/Loader.py` | Loads generated JSONL files into the Snowflake `daily_records` table |
+| `sql/classify_calibration.sql` | Zero-shot classification of the reference window (days 15–34) |
+| `sql/drift_signals.sql` | Tier 1 (S1–S3), Tier 2 (S4–S6), and Tier 3 (S7a) signal computation |
+| `DESIGN.md` | Mid-project experimental design doc (superseded by the paper; kept for history) |
+| `corpus/` | Pre-generated corpus data (arms BASE, B, C, D — 90 days each, ready to load) |
+| `README.md` | This file |
 
 ---
 
@@ -59,11 +61,15 @@ only by nearest-neighbor distance — at a cost of well under $1.
 
 ### 3.1 Generate the corpus (no cloud cost)
 
+The `corpus/` directory already ships pre-generated data for arms BASE, B,
+C, and D — you can skip straight to [3.2](#32-load-into-snowflake). To
+regenerate it yourself instead:
+
 ```bash
-python generate_311_corpus.py --arm BASE --out ./corpus
-python generate_311_corpus.py --arm B --magnitude medium --out ./corpus
-python generate_311_corpus.py --arm C --magnitude medium --out ./corpus
-python generate_311_corpus.py --arm D --magnitude medium --out ./corpus
+python python/generate_311_corpus.py --arm BASE --out ./corpus
+python python/generate_311_corpus.py --arm B --magnitude medium --out ./corpus
+python python/generate_311_corpus.py --arm C --magnitude medium --out ./corpus
+python python/generate_311_corpus.py --arm D --magnitude medium --out ./corpus
 ```
 
 Each arm produces 90 daily JSONL files (`day_000.jsonl` … `day_089.jsonl`)
@@ -73,7 +79,7 @@ by construction.
 **Validate before loading anything:**
 
 ```bash
-python generate_311_corpus.py --validate ./corpus/BASE
+python python/generate_311_corpus.py --validate ./corpus/BASE
 ```
 
 Expect `GATE PASSED`. If any Tier 1 signal fires during the reference
@@ -116,7 +122,7 @@ Expect 90 days, 180,000 rows, per arm.
 ### 3.3 Reference-window classification (run once, reused by every arm)
 
 ```sql
--- run the CREATE TABLE block in classify_calibration.sql
+-- run the CREATE TABLE block in sql/classify_calibration.sql
 ```
 
 This uses the bare 10-label array. **Do not use per-label descriptions** —
@@ -129,15 +135,17 @@ that arm specifically (see Section V-B of the paper for why this matters).
 ### 3.4 Tier 1 signals (S1, S2, S3) — free, per arm
 
 Run the tokenization, S1 (Kolmogorov–Smirnov on length), S2 (vocabulary
-novelty), and S3 (type-token ratio deviation) blocks in `drift_signals.sql`,
-substituting the target arm in each `WHERE arm = '<ARM>'` clause.
+novelty), and S3 (type-token ratio deviation) blocks in
+`sql/drift_signals.sql`, substituting the target arm in each
+`WHERE arm = '<ARM>'` clause.
 
 ### 3.5 Tier 2 signals (S4, S5, S6) — near-free, per arm
 
-Run `tier2_arm_c_full.sql` end to end, substituting the target arm
-throughout. Confirm row counts at each checkpoint before proceeding to the
-next step — an empty intermediate table is a common failure mode and is
-cheaper to catch early than at the final signal computation.
+Run the Tier 2 blocks in `sql/drift_signals.sql` end to end, substituting
+the target arm throughout. Confirm row counts at each checkpoint before
+proceeding to the next step — an empty intermediate table is a common
+failure mode and is cheaper to catch early than at the final signal
+computation.
 
 ### 3.6 Tier 3 signal (S7a) — the paid step
 
@@ -151,7 +159,7 @@ WHERE arm = '<ARM>' AND day_index BETWEEN 35 AND 89;
 ```
 
 Then normalize renamed labels back to their canonical form and compute
-the chi-square statistic per `drift_signals.sql`'s S7a block.
+the chi-square statistic per `sql/drift_signals.sql`'s S7a block.
 
 ### 3.7 Threshold and detection
 
