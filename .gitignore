@@ -1,0 +1,16 @@
+# Generated corpus data — regenerate via generate_311_corpus.py, don't commit
+corpus/
+*.jsonl
+
+# Snowflake / environment credentials — never commit these
+.env
+*.pem
+*_rsa
+snowflake_config*
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
