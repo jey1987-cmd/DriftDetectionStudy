@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 300" width="1280" height="300" role="img" aria-label="DriftDetectionStudy — Reproducibility Package">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#14171c"/>
+      <stop offset="100%" stop-color="#1f242d"/>
+    </linearGradient>
+    <linearGradient id="spike" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#e8873a"/>
+      <stop offset="100%" stop-color="#f3ab6f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e8873a" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#e8873a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1280" height="300" fill="url(#bg)"/>
+
+  <!-- faint vertical grid -->
+  <g stroke="#ffffff" stroke-opacity="0.05" stroke-width="1">
+    <line x1="120" y1="0" x2="120" y2="300"/>
+    <line x1="320" y1="0" x2="320" y2="300"/>
+    <line x1="520" y1="0" x2="520" y2="300"/>
+  </g>
+
+  <!-- text block -->
+  <text x="70" y="88" font-family="'DejaVu Sans Mono', 'Courier New', monospace" font-size="15" letter-spacing="3" fill="#e8873a">REPRODUCIBILITY PACKAGE · IEEE ACCESS</text>
+
+  <text x="68" y="150" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="52" font-weight="700" fill="#f2f3f5">DriftDetectionStudy</text>
+
+  <text x="70" y="188" font-family="Georgia, 'Times New Roman', serif" font-size="19" fill="#9aa3b0">A Cost-Normalized, Three-Arm Study of Text Classification Monitoring</text>
+
+  <text x="70" y="224" font-family="'DejaVu Sans Mono', 'Courier New', monospace" font-size="13" letter-spacing="1" fill="#767f8c">synthetic corpus · personal Snowflake account · zero employer data</text>
+
+  <!-- detection-lag motif -->
+  <g>
+    <line x1="760" y1="176" x2="1220" y2="176" stroke="#4a5261" stroke-width="1.5" stroke-dasharray="5 6"/>
+    <text x="1220" y="171" font-family="'DejaVu Sans Mono', 'Courier New', monospace" font-size="12" fill="#5b6472" text-anchor="end">threshold</text>
+
+    <polyline points="760,196 800,190 840,199 880,193 920,197 962,192"
+              fill="none" stroke="#5b6472" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <polyline points="962,192 992,150 1030,112 1070,92 1110,78 1150,69 1190,63"
+              fill="none" stroke="url(#spike)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <circle cx="992" cy="150" r="26" fill="url(#glow)"/>
+    <circle cx="992" cy="150" r="5" fill="#f3ab6f"/>
+    <line x1="992" y1="150" x2="992" y2="230" stroke="#e8873a" stroke-width="1" stroke-dasharray="3 4" stroke-opacity="0.6"/>
+    <text x="992" y="246" font-family="'DejaVu Sans Mono', 'Courier New', monospace" font-size="12" fill="#e8873a" text-anchor="middle">fired</text>
+  </g>
+</svg>

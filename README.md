@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.svg" alt="DriftDetectionStudy — Reproducibility Package" width="100%">
+</p>
+
 # DriftDetectionStudy — Reproducibility Package
 
 Companion repository for:
