@@ -232,7 +232,20 @@ WITH pair AS (
     SELECT d.arm, d.day_index, d.record_id,
            MAX(VECTOR_COSINE_SIMILARITY(d.emb, r.emb)) AS best_sim
     FROM DRIFT_STUDY.FEAT.embeddings d
-    JOIN DRIFT_STUDY.FEAT.ref_sample_emb r ON r.arm = d.arm
+    JOIN DRIFT_STUDY.FEAT.ref_sample_emb r
+      ON r.arm = d.arm
+     AND r.record_id <> d.record_id  -- leave-one-out: exclude self-match.
+         -- Without this, a day-d record that is ALSO in the reference
+         -- sample (true for ~half of reference-window days 15-34, since
+         -- ref_sample_emb is itself drawn from that window) scores a
+         -- spurious cosine similarity of 1.0 against itself, deflating
+         -- the reference window's calibration mean/stdev. Measurement-
+         -- window days (35+) were never affected, since they cannot
+         -- appear in ref_sample_emb by construction -- the artifact was
+         -- confined to the calibration window and produced a false
+         -- discontinuity at the reference/measurement boundary. See
+         -- response to reviewers, Reviewer 1 Concern #4 / Reviewer 2
+         -- Concern #3.
     GROUP BY 1,2,3
 )
 SELECT arm, day_index, AVG(1 - best_sim) AS statistic

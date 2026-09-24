@@ -198,7 +198,7 @@ failure mode this avoids.
 | S3 | 1 day | 1 day | not detected |
 | S4 | 1 day | 1 day | not detected |
 | S5 | 1 day | 9 days | not detected |
-| S6 | 1 day | 1 day | 1 day |
+| S6 | 1 day | 1 day | not detected |
 | S7a | not detected | 1 day | 34 days |
 
 If your reproduction diverges meaningfully from this table, check first
