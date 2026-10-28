@@ -324,18 +324,33 @@ class Generator:
         return Record(f"{self.arm}-{day:03d}-{i:05d}", self.arm, day, text, label)
 
 
-def generate(arm: str, magnitude: str) -> list[Record]:
-    """Days 0-34 are generated from a fixed seed independent of the arm, so every
-    arm shares its reference window byte-for-byte with BASE."""
+def generate(arm: str, magnitude: str, seed: int = SEED, total_days: int = DAYS,
+             label: str | None = None) -> list[Record]:
+    """Days 0-34 are generated from the given seed independent of the arm, so every
+    arm sharing that seed shares its reference window byte-for-byte with BASE.
+
+    Varying ``seed`` varies the ENTIRE corpus, including days 0-34 (the seed is
+    mixed into every day's RNG stream below, not just the drifted ones) - that is
+    what makes two generations with different seeds independent replicates rather
+    than copies sharing a reference window.
+
+    ``label``, if given, overrides the record-level ``arm`` field and the
+    record_id prefix (e.g. "BASE_s01" instead of "BASE") so that replicate seeds
+    loaded side by side in the same table don't collide on record_id. Defaults
+    (seed=SEED, label=None) reproduce the original output byte-for-byte.
+    """
     out: list[Record] = []
-    for day in range(DAYS):
+    out_label = label or arm
+    for day in range(total_days):
         # pre-drift days use the BASE stream; post-drift days use the arm stream
         effective_arm = "BASE" if day < DRIFT_ONSET else arm
-        rng = random.Random(f"{SEED}-{effective_arm}-{magnitude}-{day}")
+        rng = random.Random(f"{seed}-{effective_arm}-{magnitude}-{day}")
         gen = Generator(effective_arm, magnitude, rng)
         for i in range(RECORDS_PER_DAY):
             r = gen.make(day, i)
-            r.arm = arm                      # label the file by requested arm
+            r.arm = out_label                # label the file by requested arm/label
+            if label:
+                r.record_id = f"{label}-{day:03d}-{i:05d}"
             out.append(r)
     return out
 
@@ -434,6 +449,22 @@ def main() -> None:
     ap.add_argument("--arm", choices=["BASE", "A", "B", "C", "D", "E"], default="BASE")
     ap.add_argument("--magnitude", choices=sorted(MAGNITUDES), default="medium")
     ap.add_argument("--out", type=Path, default=Path("./corpus"))
+    ap.add_argument("--seed", type=int, default=SEED,
+                    help="RNG seed; varies the entire corpus including days "
+                         "0-34, so a different seed is an independent "
+                         "replicate, not just a different drift realisation "
+                         "(default: %(default)s, the paper's seed)")
+    ap.add_argument("--label", default=None,
+                    help="override the output directory name and the 'arm' "
+                         "field/record_id prefix written to each record (e.g. "
+                         "BASE_s01); defaults to --arm. Use this for replicate "
+                         "seeds so they don't collide with the shipped corpus "
+                         "or with each other when loaded together")
+    ap.add_argument("--days", type=int, default=DAYS,
+                    help="total days to generate (default: %(default)s); "
+                         "raise this for --arm D to test whether Tier 1/2 "
+                         "signals eventually cross threshold beyond day 89 "
+                         "(the drift ramp itself saturates at day 75 either way)")
     ap.add_argument("--validate", type=Path,
                     help="run the Phase 1 gate over an existing corpus directory")
     args = ap.parse_args()
@@ -441,12 +472,14 @@ def main() -> None:
     if args.validate:
         sys.exit(validate(args.validate))
 
-    print(f"arm={args.arm} magnitude={args.magnitude} "
+    print(f"arm={args.arm} magnitude={args.magnitude} seed={args.seed} "
+          f"label={args.label or args.arm} "
           f"({MAGNITUDES[args.magnitude]:.0%})", file=sys.stderr)
-    recs = generate(args.arm, args.magnitude)
-    print(f"  {len(recs):,} records over {DAYS} days", file=sys.stderr)
+    recs = generate(args.arm, args.magnitude, seed=args.seed,
+                     total_days=args.days, label=args.label)
+    print(f"  {len(recs):,} records over {args.days} days", file=sys.stderr)
     summarise(recs)
-    write(recs, args.out, args.arm)
+    write(recs, args.out, args.label or args.arm)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -42,6 +43,22 @@ WAREHOUSE = "DT_TESTBED_WH"
 COLUMNS = ["record_id", "arm", "day_index", "text", "true_label"]
 
 ARMS = ["BASE", "A", "B", "C", "D", "E"]
+
+# Accepts a base arm on its own (e.g. "B") or a replicate label produced by
+# generate_311_corpus.py's --label / gen_replicates.py (e.g. "B_s01",
+# "BASE_s10") - any of the base ARMS followed by an optional "_s<digits>" seed
+# suffix. Previously restricted to the fixed ARMS list, which rejected every
+# replicate label by construction.
+ARM_RE = re.compile(r"^(?:%s)(?:_s\d+)?$" % "|".join(ARMS))
+
+
+def _valid_arm(value: str) -> str:
+    if value == "all" or ARM_RE.match(value):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"invalid arm '{value}': expected one of {ARMS}, 'all', or a "
+        f"replicate label like 'B_s01' (base arm + '_s' + seed index)"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -205,8 +222,9 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--corpus-dir", type=Path, default=Path("./corpus"),
                     help="root directory passed as --out to Corpus_Generator.py")
-    ap.add_argument("--arm", default="BASE", choices=ARMS + ["all"],
-                    help="arm subdirectory to load, or 'all' for every arm found")
+    ap.add_argument("--arm", default="BASE", type=_valid_arm,
+                    help="arm subdirectory to load, 'all' for every arm "
+                         "found, or a replicate label like 'B_s01'")
     ap.add_argument("--check", action="store_true",
                     help="validate the jsonl files locally, do not connect to Snowflake")
     ap.add_argument("--pause", type=float, default=0.0,
