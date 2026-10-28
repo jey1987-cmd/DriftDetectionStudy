@@ -410,6 +410,57 @@ GROUP BY 1,2;
 
 
 -- ============================================================================
+-- 5b. POPULATE RESULT.signal_daily  (reviewer-response-r1: this was missing)
+-- ============================================================================
+-- signal_fired and detection_summary below both read FROM signal_daily, but
+-- nothing in this file ever inserted the Tier 1/2/3 views' output into it -
+-- every view above is fully specified, this section only wires it into the
+-- results table, no new statistic logic. Re-runnable: each block deletes its
+-- own (signal, strategy) rows first, matching this file's existing pattern of
+-- fully recomputing derived tables from whatever is currently in
+-- daily_records (see tokens/daily_sample/embeddings/predictions above), so
+-- re-running after loading another arm or replicate is safe, not additive.
+--
+-- STRATEGY GAP: DESIGN.md §4.3 calls for every signal under both FIXED and
+-- SLIDING (trailing 7-day) reference strategies. Only FIXED is implemented
+-- anywhere in this file - none of the views above compute a sliding
+-- reference. Only 'FIXED' rows are inserted below; add the SLIDING views
+-- first if the response to reviewers needs that comparison.
+
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S1' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S1', 'FIXED', DT_STUDY.FEAT.ks_length(arm, day_index)
+FROM (SELECT DISTINCT arm, day_index FROM DT_STUDY.FEAT.record_lengths);
+
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S2' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S2', 'FIXED', statistic FROM DT_STUDY.FEAT.s2_vocab_novelty;
+
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S3' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S3', 'FIXED', statistic FROM DT_STUDY.FEAT.s3_ttr_shift;
+
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S4' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S4', 'FIXED', statistic FROM DT_STUDY.FEAT.s4_centroid_shift;
+
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S5' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S5', 'FIXED', statistic FROM DT_STUDY.FEAT.s5_mmd_linear;
+
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S6' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S6', 'FIXED', statistic FROM DT_STUDY.FEAT.s6_nn_distance;
+
+-- S7a only - this is the paid-classification-dependent signal (README §3.6).
+-- Run this block only for the arms/replicates whose predictions table you
+-- actually paid to build; it is a no-op (zero rows) for any arm without one.
+DELETE FROM DT_STUDY.RESULT.signal_daily WHERE signal = 'S7a' AND strategy = 'FIXED';
+INSERT INTO DT_STUDY.RESULT.signal_daily
+SELECT arm, day_index, 'S7a', 'FIXED', statistic FROM DT_STUDY.FEAT.s7a_prior_shift;
+
+
+-- ============================================================================
 -- 6. GROUND TRUTH  (analysis only - never an input to any detector)
 -- ============================================================================
 
