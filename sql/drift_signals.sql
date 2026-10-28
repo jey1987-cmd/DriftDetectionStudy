@@ -310,6 +310,32 @@ WHERE day_index >= 15;
 -- ----------------------------------------------------------------------------
 -- S7a  CLASS PRIOR SHIFT - Pearson chi-square against reference priors
 -- ----------------------------------------------------------------------------
+-- ZERO-FREQUENCY BIN (reviewer-response-r1): Arm C's novel class
+-- ('sidewalk_obstruction') is injected only from day 35 onward, so it never
+-- appears in ref_priors, which is built from days 15-34 only. On a
+-- measurement-window day where the classifier predicts that label, the LEFT
+-- JOIN to ref_priors produces r.p = NULL for that bin, not zero - NULL
+-- propagates through POWER()/NULLIF() and would either divide by zero
+-- (NULLIF(0,0) -> NULL) or drop that term from the SUM(), i.e. silently
+-- discard exactly the bin carrying the arm-C signal. COALESCE(r.p, 1e-6)
+-- is the fix already in place: it substitutes a small constant expected
+-- probability instead of leaving the reference count undefined, so the
+-- novel class contributes a (large) finite term to the chi-square statistic
+-- rather than vanishing from it or raising a divide-by-zero.
+--
+-- Caveat to disclose: 1e-6 is a fixed constant, not a formally derived
+-- smoothing parameter - it was chosen because at RECORDS_PER_DAY=2000,
+-- t.n * 1e-6 ~ 0.002 is small enough not to distort any class that DOES
+-- have reference support, while still being nonzero. A more principled
+-- alternative is additive (Laplace/Dirichlet) smoothing applied to every
+-- class uniformly - p_smoothed = (ref_count + alpha) / (ref_total + alpha*k)
+-- for k = number of distinct predicted labels including the novel one -
+-- which replaces the arbitrary constant with a parameter that has a
+-- standard interpretation and degrades gracefully as k grows. See
+-- s7a_prior_shift_laplace below for a side-by-side sensitivity check; it is
+-- NOT used by signal_daily/detection_summary, so it does not change any
+-- already-reported number, but it is evidence the published result is not
+-- an artifact of the specific epsilon chosen.
 
 CREATE OR REPLACE VIEW DT_STUDY.FEAT.ref_priors AS
 SELECT arm, predicted_label,
@@ -336,6 +362,51 @@ GROUP BY 1,2;
 -- COALESCE to 1e-6 handles a class predicted on day d that never appeared in
 -- the reference - without it the term divides by zero and the day is lost,
 -- which is exactly the arm-C case the signal should be catching.
+
+-- ----------------------------------------------------------------------------
+-- S7a SENSITIVITY CHECK - Laplace-smoothed reference priors
+-- ----------------------------------------------------------------------------
+-- Same statistic, but every label's reference probability (including labels
+-- absent from the reference window entirely) is smoothed by alpha=1 over the
+-- observed label vocabulary, instead of patching only the absent ones with a
+-- fixed constant. Compare s7a_prior_shift vs s7a_prior_shift_laplace on the
+-- same arm/day - if they agree closely, the published S7a numbers are not an
+-- artifact of the 1e-6 choice.
+
+CREATE OR REPLACE VIEW DT_STUDY.FEAT.ref_priors_laplace AS
+WITH vocab AS (
+    SELECT DISTINCT arm, predicted_label FROM DT_STUDY.FEAT.predictions
+),
+ref_counts AS (
+    SELECT arm, predicted_label, COUNT(*) AS c
+    FROM DT_STUDY.FEAT.predictions
+    WHERE day_index BETWEEN 15 AND 34
+    GROUP BY 1,2
+),
+k AS (SELECT arm, COUNT(DISTINCT predicted_label) AS n_labels
+      FROM DT_STUDY.FEAT.predictions GROUP BY 1),
+ref_total AS (SELECT arm, SUM(c) AS n FROM ref_counts GROUP BY 1)
+SELECT v.arm, v.predicted_label,
+       (COALESCE(rc.c, 0) + 1) / (rt.n + k.n_labels)::FLOAT AS p
+FROM vocab v
+JOIN k        ON k.arm = v.arm
+JOIN ref_total rt ON rt.arm = v.arm
+LEFT JOIN ref_counts rc ON rc.arm = v.arm AND rc.predicted_label = v.predicted_label;
+
+CREATE OR REPLACE VIEW DT_STUDY.FEAT.s7a_prior_shift_laplace AS
+WITH obs AS (
+    SELECT arm, day_index, predicted_label, COUNT(*) AS o
+    FROM DT_STUDY.FEAT.predictions
+    GROUP BY 1,2,3
+),
+tot AS (SELECT arm, day_index, SUM(o) AS n FROM obs GROUP BY 1,2)
+SELECT o.arm, o.day_index,
+       SUM( POWER(o.o - t.n * r.p, 2) / (t.n * r.p) ) AS statistic
+FROM obs o
+JOIN tot t ON t.arm = o.arm AND t.day_index = o.day_index
+JOIN DT_STUDY.FEAT.ref_priors_laplace r
+  ON r.arm = o.arm AND r.predicted_label = o.predicted_label
+GROUP BY 1,2;
 
 
 -- ============================================================================
