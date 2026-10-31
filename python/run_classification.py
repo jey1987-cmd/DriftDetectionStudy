@@ -242,6 +242,28 @@ def cmd_measure(args) -> None:
         conn.close()
 
 
+#   A --tokens-per-call reconciled from CORTEX_AI_FUNCTIONS_USAGE_HISTORY
+#   shortly after the measure run can read back as zero (or near it) if that
+#   view hasn't caught up yet (it can lag ~3 hours) - and a zero/near-zero
+#   tokens-per-call makes the full run look absurdly cheap, defeating the
+#   entire point of this guard. A real AI_CLASSIFY call against this
+#   taxonomy's ~15-token records plus a 10-label array cannot plausibly cost
+#   under this many tokens even in the bare-label case; treat anything below
+#   it as a lag artifact, not a real measurement.
+MIN_PLAUSIBLE_TOKENS_PER_CALL = 30
+
+# Historical reference points from the manuscript (README.md / Section VI-B),
+# measured at PAST Cortex rates - not a validation of current rates, just a
+# sanity cross-check. If a dry-run estimate at current rates differs from
+# these by an order of magnitude or more, stop and double check
+# --tokens-per-call and --labels before confirming, rather than assuming
+# pricing alone explains the gap.
+HISTORICAL_REFERENCE = {
+    "calibration": (40_000, 26.0),    # (calls, USD, at old rates, shared across arms)
+    "predictions": (110_000, 74.0),   # (calls, USD, at old rates, per arm)
+}
+
+
 def cmd_run(args) -> None:
     if args.tokens_per_call is None:
         raise SystemExit(
@@ -249,6 +271,15 @@ def cmd_run(args) -> None:
             "Get a real number from --mode measure or --mode history first - "
             "this is the guard against exactly the kind of 100x cost "
             "surprise that prompted this script."
+        )
+    if args.tokens_per_call < MIN_PLAUSIBLE_TOKENS_PER_CALL:
+        raise SystemExit(
+            f"--tokens-per-call={args.tokens_per_call} is implausibly low "
+            f"(floor: {MIN_PLAUSIBLE_TOKENS_PER_CALL}). This is almost "
+            f"certainly a CORTEX_AI_FUNCTIONS_USAGE_HISTORY read taken "
+            f"before that view caught up (it can lag ~3 hours) rather than "
+            f"a real measurement - wait and re-read it, don't pass this "
+            f"value through."
         )
 
     conn = connect(args.connection)
@@ -267,6 +298,17 @@ def cmd_run(args) -> None:
         est = cost_estimate(n_rows, args.tokens_per_call)
         print_estimate(f"FULL RUN estimate: {args.step} / arm={args.arm} / "
                         f"{args.labels} labels", est)
+
+        ref_calls, ref_usd = HISTORICAL_REFERENCE[args.step]
+        ratio = est["usd_global"] / ref_usd if ref_usd else float("inf")
+        print(f"\n  reference: manuscript reports ~${ref_usd:,.0f} for "
+              f"{ref_calls:,} calls at previously-measured rates "
+              f"({args.step})")
+        if ratio >= 10 or ratio <= 0.1:
+            print(f"  >>> this estimate is {ratio:,.1f}x the historical "
+                  f"reference - stop and double-check --tokens-per-call and "
+                  f"--labels before confirming; pricing drift alone is "
+                  f"unlikely to explain a gap this large <<<")
 
         if not args.confirm:
             print("\nDRY RUN - pass --confirm to actually execute.")
