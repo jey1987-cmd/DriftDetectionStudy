@@ -34,8 +34,14 @@ USE SCHEMA DT_STUDY.DRIFT;
 -- daily_records itself is created once via README.md §3.2 (or Account2.sql) and
 -- loaded by Loader.py - it is NOT recreated here, since doing so would silently
 -- truncate whatever has already been loaded.
+--
+-- IDEMPOTENCY FIX (reviewer-response-r1): signal_daily was CREATE OR REPLACE,
+-- which would discard every other arm's results if this whole file is re-run
+-- per arm/replicate - undoing the point of making every block below
+-- incremental. CREATE TABLE IF NOT EXISTS here; Section 5b's per-signal
+-- DELETE+INSERT is what keeps re-runs idempotent per arm.
 
-CREATE OR REPLACE TABLE DT_STUDY.RESULT.signal_daily (
+CREATE TABLE IF NOT EXISTS DT_STUDY.RESULT.signal_daily (
     arm         STRING,
     day_index   INT,
     signal      STRING,
@@ -49,8 +55,24 @@ CREATE OR REPLACE TABLE DT_STUDY.RESULT.signal_daily (
 -- ============================================================================
 -- Materialise rather than re-derive: tokenisation is the single most repeated
 -- operation in the study and recomputing it per signal triples Tier 1 cost.
+--
+-- INCREMENTAL FIX (reviewer-response-r1): every table in this section used to
+-- be CREATE OR REPLACE TABLE ... AS SELECT ... with no WHERE arm filter, so it
+-- recomputed over EVERY arm currently in daily_records on every run - loading
+-- one more replicate and re-running this file re-tokenised every arm already
+-- done. Tier 1 is free, so that was only wasted compute, not wasted money, but
+-- the same CREATE-OR-REPLACE-everything pattern in Section 3 (embeddings) and
+-- Section 4 (predictions) DOES re-bill metered API calls for every arm already
+-- processed, not just the new one - see those sections. Switched the whole
+-- pipeline to create-once + per-arm DELETE+INSERT uniformly, substituting
+-- '<ARM>' with the arm/replicate label just loaded, so re-running this file
+-- after loading one more arm only (re)processes that arm.
 
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.tokens AS
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.tokens (
+    arm STRING, day_index INT, record_id STRING, token STRING
+);
+DELETE FROM DT_STUDY.FEAT.tokens WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.tokens
 SELECT r.arm,
        r.day_index,
        r.record_id,
@@ -58,11 +80,16 @@ SELECT r.arm,
 FROM DT_STUDY.DRIFT.daily_records r,
      LATERAL SPLIT_TO_TABLE(
          REGEXP_REPLACE(LOWER(r.text), '[^a-z0-9 ]', ' '), ' ') t
-WHERE t.value <> '';
+WHERE r.arm = '<ARM>' AND t.value <> '';
 
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.record_lengths AS
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.record_lengths (
+    arm STRING, day_index INT, record_id STRING, n_tokens INT
+);
+DELETE FROM DT_STUDY.FEAT.record_lengths WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.record_lengths
 SELECT arm, day_index, record_id, COUNT(*) AS n_tokens
 FROM DT_STUDY.FEAT.tokens
+WHERE arm = '<ARM>'
 GROUP BY 1,2,3;
 
 
@@ -113,10 +140,12 @@ $$;
 -- Computed over token OCCURRENCES, not distinct types: a single new word used
 -- 500 times is a bigger distribution change than 5 words used once each.
 
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.ref_vocab AS
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.ref_vocab (arm STRING, token STRING);
+DELETE FROM DT_STUDY.FEAT.ref_vocab WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.ref_vocab
 SELECT DISTINCT arm, token
 FROM DT_STUDY.FEAT.tokens
-WHERE day_index BETWEEN 15 AND 34;
+WHERE arm = '<ARM>' AND day_index BETWEEN 15 AND 34;
 
 CREATE OR REPLACE VIEW DT_STUDY.FEAT.s2_vocab_novelty AS
 SELECT t.arm,
@@ -157,7 +186,19 @@ FROM DT_STUDY.FEAT.daily_ttr d JOIN ref r ON r.arm = d.arm;
 -- 2,000.  The sample must be deterministic so the study is reproducible, and it
 -- must be the same size every day or the statistics are not comparable.
 
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.daily_sample AS
+-- COST CONTROL, INCREMENTAL (reviewer-response-r1): embeddings below is the
+-- single most expensive table to recompute carelessly, since EMBED_TEXT_768 is
+-- a metered call per row. The old CREATE OR REPLACE re-embedded every arm
+-- already done, every time this block ran - load one new replicate, rerun,
+-- and pay again for every prior arm's 200/day sample too. DELETE+INSERT scoped
+-- to '<ARM>' makes re-running this block after loading one more arm cost
+-- exactly that arm's embeddings, not everyone's.
+
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.daily_sample (
+    arm STRING, day_index INT, record_id STRING, text STRING
+);
+DELETE FROM DT_STUDY.FEAT.daily_sample WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.daily_sample
 SELECT arm, day_index, record_id, text
 FROM (
     SELECT arm, day_index, record_id, text,
@@ -166,15 +207,21 @@ FROM (
                ORDER BY HASH(record_id)          -- deterministic, not RANDOM()
            ) AS rn
     FROM DT_STUDY.DRIFT.daily_records
+    WHERE arm = '<ARM>'
 )
 WHERE rn <= 200;
 
 -- Embed once, reuse for S4/S5/S6.  Stored as ARRAY so element-wise aggregation
 -- is possible; Snowflake has no AVG() over VECTOR.
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.embeddings AS
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.embeddings (
+    arm STRING, day_index INT, record_id STRING, emb ARRAY
+);
+DELETE FROM DT_STUDY.FEAT.embeddings WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.embeddings
 SELECT arm, day_index, record_id,
        SNOWFLAKE.CORTEX.EMBED_TEXT_768('snowflake-arctic-embed-m', text) AS emb
-FROM DT_STUDY.FEAT.daily_sample;
+FROM DT_STUDY.FEAT.daily_sample
+WHERE arm = '<ARM>';
 
 -- Element-wise long form, used for centroid arithmetic
 CREATE OR REPLACE VIEW DT_STUDY.FEAT.emb_elements AS
@@ -214,13 +261,17 @@ GROUP BY 1,2;
 -- precisely the case S4 is blind to.  O(k * |ref|) pairwise - the reference is
 -- capped at 2,000 vectors to bound cost.
 
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.ref_sample_emb AS
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.ref_sample_emb (
+    arm STRING, record_id STRING, emb ARRAY
+);
+DELETE FROM DT_STUDY.FEAT.ref_sample_emb WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.ref_sample_emb
 SELECT arm, record_id, emb
 FROM (
     SELECT arm, record_id, emb,
            ROW_NUMBER() OVER (PARTITION BY arm ORDER BY HASH(record_id)) rn
     FROM DT_STUDY.FEAT.embeddings
-    WHERE day_index BETWEEN 15 AND 34
+    WHERE arm = '<ARM>' AND day_index BETWEEN 15 AND 34
 )
 WHERE rn <= 2000;
 
@@ -282,7 +333,23 @@ GROUP BY 1,2;
 -- adding 'sidewalk_obstruction' (the novel class) - build that as a second
 -- table for arm='C' specifically, as classify_calibration.sql's header notes;
 -- do not add it to this shared array or every other arm's predictions change.
-CREATE OR REPLACE TABLE DT_STUDY.FEAT.predictions AS
+--
+-- INCREMENTAL/COST FIX (reviewer-response-r1): this is the single most
+-- important table to make incremental - it's the paid classification step
+-- (~$74/arm at the rates in README.md, needs re-verifying). The old CREATE OR
+-- REPLACE with no arm filter reclassified EVERY arm present in daily_records
+-- on every run, which directly conflicts with running S7a on only 3-5 of 10+
+-- replicate seeds: with a global recompute, there is no way to classify a
+-- subset without either classifying everyone or physically unloading the
+-- arms you don't want billed. DELETE+INSERT scoped to '<ARM>' makes this
+-- block classify exactly the arm you name and nothing else - run it only for
+-- the 3-5 seeds you've decided to pay for.
+CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.predictions (
+    arm STRING, day_index INT, record_id STRING, true_label STRING,
+    predicted_label STRING
+);
+DELETE FROM DT_STUDY.FEAT.predictions WHERE arm = '<ARM>';
+INSERT INTO DT_STUDY.FEAT.predictions
 SELECT arm, day_index, record_id, true_label,
        AI_CLASSIFY(
            text,
@@ -291,7 +358,7 @@ SELECT arm, day_index, record_id, true_label,
             'graffiti','park_maintenance','water_leak','stray_animal']
        ):labels[0]::VARCHAR AS predicted_label
 FROM DT_STUDY.DRIFT.daily_records
-WHERE day_index >= 15;
+WHERE arm = '<ARM>' AND day_index >= 15;
 
 -- NOTE ON CONFIDENCE (S7b): AI_CLASSIFY does not return a calibrated score.
 -- To run S7b you need a confidence proxy.  Two workable options:
@@ -552,7 +619,10 @@ LEFT JOIN (
 -- and join to metering afterwards.  ACCOUNT_USAGE lags several hours - use it
 -- for final collection only, never during the run.
 
-CREATE OR REPLACE TABLE DT_STUDY.RESULT.signal_timing (
+-- CREATE TABLE IF NOT EXISTS (reviewer-response-r1): same idempotency fix as
+-- signal_daily above - this is an append-only log, CREATE OR REPLACE would
+-- discard every prior arm's timing log on re-run.
+CREATE TABLE IF NOT EXISTS DT_STUDY.RESULT.signal_timing (
     arm STRING, day_index INT, signal STRING,
     started_at TIMESTAMP_LTZ, ended_at TIMESTAMP_LTZ
 );
