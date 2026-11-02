@@ -87,6 +87,21 @@ BARE_LABELS = (
 # vocabulary - see classify_calibration.sql's header for the full
 # explanation. Every table this script writes to has this column; every
 # INSERT below must populate it.
+# Arm C ONLY (README.md:143-145, drift_signals.sql:384-387): the novel class
+# 'sidewalk_obstruction' is injected from day 35 onward and is NOT in
+# BARE_LABELS - using the 10-label array against arm=C would make it
+# structurally impossible for AI_CLASSIFY to ever predict the novel class,
+# defeating the point of the S7a zero-frequency-bin test. This is the 10
+# bare labels above plus that 11th class; true_label's exact string is
+# confirmed via generate_311_corpus.py's NOVEL_CLASS constant.
+BARE_LABELS_11 = (
+    "['pothole_road','streetlight_outage',"
+    "'noise_disturbance_non_construction','construction_site_disturbance',"
+    "'illegal_dumping','overflowing_bin',"
+    "'graffiti','park_maintenance','water_leak','stray_animal',"
+    "'sidewalk_obstruction']"
+)
+
 LABEL_NORM_CASE = """
        CASE predicted_label
            WHEN 'noise_disturbance_non_construction' THEN 'noise_complaint'
@@ -220,8 +235,9 @@ SCRATCH_DDL = f"""
 
 def cmd_measure(args) -> None:
     cfg = STEP_CONFIG[args.step]
-    labels_literal = BARE_LABELS if args.labels == "bare" else DESCRIBED_LABELS
-    worst_case_tokens_per_call = 200 if args.labels == "bare" else 20_000
+    labels_literal = {"bare": BARE_LABELS, "bare11": BARE_LABELS_11,
+                       "described": DESCRIBED_LABELS}[args.labels]
+    worst_case_tokens_per_call = 200 if args.labels in ("bare", "bare11") else 20_000
     worst_case = cost_estimate(args.limit, worst_case_tokens_per_call)
     print_estimate(
         f"WORST-CASE ceiling for this {args.limit}-call test "
@@ -303,11 +319,23 @@ HISTORICAL_REFERENCE = {
 
 
 MEASUREMENT_WINDOW_DAY_FILTER = "day_index BETWEEN 35 AND 89"
+# For arm='C' only: writes the calibration window into DT_STUDY.DRIFT.predictions
+# (NOT predictions_calibration, which ref_priors never reads - see
+# classify_calibration.sql's header). Needed because ref_priors/s7a_prior_shift
+# are arm-partitioned (drift_signals.sql:464-469, 483) and arm='C' has zero
+# existing rows there for days 15-34: without this, every label falls back to
+# COALESCE(...,1e-6), not just the novel class, corrupting the statistic on
+# every day. Must use the SAME 11-label array as the measurement-window pass,
+# per README.md:143-145 - otherwise the reference prior reflects a different
+# classifier configuration than what it's being compared against.
+CALIBRATION_WINDOW_DAY_FILTER = "day_index BETWEEN 15 AND 34"
 
 
 def cmd_run(args) -> None:
-    if args.measurement_only and args.step != "predictions":
-        raise SystemExit("--measurement-only only applies to --step predictions")
+    if args.measurement_only and args.calibration_only:
+        raise SystemExit("--measurement-only and --calibration-only are mutually exclusive")
+    if (args.measurement_only or args.calibration_only) and args.step != "predictions":
+        raise SystemExit("--measurement-only/--calibration-only only apply to --step predictions")
     if args.tokens_per_call is None:
         raise SystemExit(
             "refusing to run the full step without --tokens-per-call. "
@@ -330,7 +358,12 @@ def cmd_run(args) -> None:
     cfg = STEP_CONFIG[args.step]
     # Scoped (not mutated globally) so other calls still get cfg['day_filter']
     # unchanged - --measurement-only is opt-in per invocation.
-    day_filter = MEASUREMENT_WINDOW_DAY_FILTER if args.measurement_only else cfg["day_filter"]
+    if args.measurement_only:
+        day_filter = MEASUREMENT_WINDOW_DAY_FILTER
+    elif args.calibration_only:
+        day_filter = CALIBRATION_WINDOW_DAY_FILTER
+    else:
+        day_filter = cfg["day_filter"]
     try:
         cur.execute(
             f"SELECT COUNT(*) FROM DT_STUDY.DRIFT.daily_records "
@@ -344,6 +377,8 @@ def cmd_run(args) -> None:
         label = f"FULL RUN estimate: {args.step} / arm={args.arm} / {args.labels} labels"
         if args.measurement_only:
             label += " / MEASUREMENT WINDOW ONLY (days 35-89, calibration untouched)"
+        elif args.calibration_only:
+            label += " / CALIBRATION WINDOW ONLY (days 15-34, into predictions)"
         est = cost_estimate(n_rows, args.tokens_per_call)
         print_estimate(label, est)
 
@@ -362,7 +397,8 @@ def cmd_run(args) -> None:
             print("\nDRY RUN - pass --confirm to actually execute.")
             return
 
-        labels_literal = BARE_LABELS if args.labels == "bare" else DESCRIBED_LABELS
+        labels_literal = {"bare": BARE_LABELS, "bare11": BARE_LABELS_11,
+                           "described": DESCRIBED_LABELS}[args.labels]
         tag = f"driftstudy-run-{args.step}-{args.arm}-{int(time.time())}"
         cur.execute(f"ALTER SESSION SET QUERY_TAG = '{tag}'")
         cur.execute(cfg["create_ddl"])
@@ -402,7 +438,7 @@ def main() -> None:
     ap.add_argument("--mode", required=True, choices=["history", "measure", "run"])
     ap.add_argument("--step", choices=["calibration", "predictions"])
     ap.add_argument("--arm")
-    ap.add_argument("--labels", choices=["bare", "described"], default="bare")
+    ap.add_argument("--labels", choices=["bare", "bare11", "described"], default="bare")
     ap.add_argument("--limit", type=int, help="row cap for --mode measure")
     ap.add_argument("--tokens-per-call", type=float,
                     help="required for --mode run; no default on purpose")
@@ -414,6 +450,13 @@ def main() -> None:
                          "calibration window (15-34). DELETE is scoped to "
                          "the same range, so existing calibration rows for "
                          "this arm are never touched.")
+    ap.add_argument("--calibration-only", action="store_true",
+                    help="--step predictions only: restrict to day_index "
+                         "BETWEEN 15 AND 34, writing into DT_STUDY.DRIFT."
+                         "predictions (not predictions_calibration). For "
+                         "arm='C' only, to give ref_priors/s7a_prior_shift "
+                         "a valid per-arm reference classified under the "
+                         "same label config as the measurement-window run.")
     ap.add_argument("--connection", default=None)
     ap.add_argument("--confirm", action="store_true",
                     help="actually execute billed Snowflake calls; omit for a dry run")
@@ -421,6 +464,13 @@ def main() -> None:
 
     if args.mode in ("measure", "run") and not (args.step and args.arm):
         raise SystemExit(f"--mode {args.mode} requires --step and --arm")
+    if args.labels == "bare11" and args.arm != "C":
+        raise SystemExit(
+            "--labels bare11 (the 11-label array including the novel class "
+            "'sidewalk_obstruction') is Arm C-specific (README.md:143-145, "
+            "drift_signals.sql:384-387) - refusing to run it against any "
+            "other arm."
+        )
     if args.mode == "measure" and not args.limit:
         raise SystemExit("--mode measure requires --limit (e.g. --limit 50)")
 
