@@ -10,3 +10,14 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Replicate-seed corpora (gen_replicates.py) and the extended-window test
+# corpus (generate_311_corpus.py --days) - regenerable from the generator +
+# seed list, not the reproducible artifact itself. Commit gen_replicates.py
+# and the seed list, not their output; a reviewer regenerates these from
+# that, not from a diff nobody could review. The shipped single-seed corpus
+# (corpus/BASE, corpus/A, corpus/B, corpus/C, corpus/D, corpus/E) is NOT
+# covered by this and stays committed as-is.
+corpus/*_s[0-9][0-9]/
+corpus/*_ext[0-9]*/
+corpus/replicates_manifest.csv
