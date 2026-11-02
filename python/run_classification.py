@@ -302,7 +302,12 @@ HISTORICAL_REFERENCE = {
 }
 
 
+MEASUREMENT_WINDOW_DAY_FILTER = "day_index BETWEEN 35 AND 89"
+
+
 def cmd_run(args) -> None:
+    if args.measurement_only and args.step != "predictions":
+        raise SystemExit("--measurement-only only applies to --step predictions")
     if args.tokens_per_call is None:
         raise SystemExit(
             "refusing to run the full step without --tokens-per-call. "
@@ -323,19 +328,24 @@ def cmd_run(args) -> None:
     conn = connect(args.connection)
     cur = conn.cursor()
     cfg = STEP_CONFIG[args.step]
+    # Scoped (not mutated globally) so other calls still get cfg['day_filter']
+    # unchanged - --measurement-only is opt-in per invocation.
+    day_filter = MEASUREMENT_WINDOW_DAY_FILTER if args.measurement_only else cfg["day_filter"]
     try:
         cur.execute(
             f"SELECT COUNT(*) FROM DT_STUDY.DRIFT.daily_records "
-            f"WHERE arm = %(arm)s AND {cfg['day_filter']}",
+            f"WHERE arm = %(arm)s AND {day_filter}",
             {"arm": args.arm},
         )
         n_rows = cur.fetchone()[0]
         if n_rows == 0:
             raise SystemExit(f"no rows found for arm='{args.arm}' - check it's loaded")
 
+        label = f"FULL RUN estimate: {args.step} / arm={args.arm} / {args.labels} labels"
+        if args.measurement_only:
+            label += " / MEASUREMENT WINDOW ONLY (days 35-89, calibration untouched)"
         est = cost_estimate(n_rows, args.tokens_per_call)
-        print_estimate(f"FULL RUN estimate: {args.step} / arm={args.arm} / "
-                        f"{args.labels} labels", est)
+        print_estimate(label, est)
 
         ref_calls, ref_usd = HISTORICAL_REFERENCE[args.step]
         ratio = est["usd_global"] / ref_usd if ref_usd else float("inf")
@@ -356,7 +366,14 @@ def cmd_run(args) -> None:
         tag = f"driftstudy-run-{args.step}-{args.arm}-{int(time.time())}"
         cur.execute(f"ALTER SESSION SET QUERY_TAG = '{tag}'")
         cur.execute(cfg["create_ddl"])
-        cur.execute(f"DELETE FROM {cfg['table']} WHERE arm = %(arm)s", {"arm": args.arm})
+        # DELETE is scoped to the same day_filter as the INSERT below (not just
+        # arm) - previously it deleted every row for the arm regardless of day
+        # range, which would have wiped BASE's existing days-15-34 calibration
+        # rows in `predictions` out from under --measurement-only.
+        cur.execute(
+            f"DELETE FROM {cfg['table']} WHERE arm = %(arm)s AND {day_filter}",
+            {"arm": args.arm},
+        )
         cur.execute(
             f"""
             INSERT INTO {cfg['table']}
@@ -366,7 +383,7 @@ def cmd_run(args) -> None:
                 SELECT arm, day_index, record_id, true_label,
                        AI_CLASSIFY(text, {labels_literal}):labels[0]::VARCHAR AS predicted_label
                 FROM DT_STUDY.DRIFT.daily_records
-                WHERE arm = %(arm)s AND {cfg['day_filter']}
+                WHERE arm = %(arm)s AND {day_filter}
             )
             """,
             {"arm": args.arm},
@@ -391,6 +408,12 @@ def main() -> None:
                     help="required for --mode run; no default on purpose")
     ap.add_argument("--months", type=int, default=6,
                     help="lookback window for --mode history (default: %(default)s)")
+    ap.add_argument("--measurement-only", action="store_true",
+                    help="--step predictions only: restrict to day_index "
+                         "BETWEEN 35 AND 89, skipping the already-populated "
+                         "calibration window (15-34). DELETE is scoped to "
+                         "the same range, so existing calibration rows for "
+                         "this arm are never touched.")
     ap.add_argument("--connection", default=None)
     ap.add_argument("--confirm", action="store_true",
                     help="actually execute billed Snowflake calls; omit for a dry run")
