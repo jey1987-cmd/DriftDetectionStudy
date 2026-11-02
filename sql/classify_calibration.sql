@@ -85,37 +85,42 @@ FROM (
 );
 
 -- ============================================================================
--- CALIBRATION-SHARING FIX FOR SINGLE-SEED ARMS (2026-11-01)
--- ============================================================================
--- Bug found during the reviewer-response-r1 validation gate: S7a (chi-square
--- class-prior shift) was coming out several orders of magnitude too large for
--- arm='B' and arm='D' (hundreds of millions instead of the expected ~10-20).
--- Root cause: ref_priors (drift_signals.sql) partitions by arm, but the block
--- above only ever populates predictions_calibration for whichever single
--- '<ARM>' it's run against. For B and D - which are NOT their own replicate
--- seed, just BASE's corpus with drift injected after day 34 - no calibration
--- rows existed under arm='B'/arm='D' at all, so every ref_priors lookup for
--- those arms missed and fell back to COALESCE(..., 1e-6) on every label/day,
--- which is what exploded the statistic.
+-- CORRECTION (2026-11-01, same day): the block below this comment, in an
+-- earlier version of this file, duplicated BASE's rows into
+-- predictions_calibration under arm='B'/'D'. That was the wrong table and
+-- didn't fix anything real - verified live:
+--   * ref_priors (drift_signals.sql) reads FROM DT_STUDY.DRIFT.predictions
+--     WHERE day_index BETWEEN 15 AND 34, never from predictions_calibration.
+--   * predictions_calibration is written only by the INSERT above (this
+--     file) and read by nothing in the pipeline - its sole purpose is
+--     mirroring the legacy S7A_CALIBRATION flat table for a manual
+--     cross-check, and that table has no arm column (20 rows, days 15-34,
+--     arm-agnostic), so it never needed B/D-specific rows either.
+--   * `predictions` already has native calibration rows for arm B/D live
+--     (40,000 each) - see the migration note below for how they got there.
+-- The duplication, if it had been needed, belonged on `predictions`, not
+-- `predictions_calibration`. It has been removed rather than corrected
+-- in place, because it turned out not to be needed going forward at all -
+-- see below.
 --
--- Fix: since B/D's days 15-34 are byte-identical to BASE's (single-seed
--- design, confirmed in README.md Section 2), their calibration is BASE's
--- calibration - copy it under each arm label rather than re-running
--- AI_CLASSIFY. This costs zero additional Cortex credits. Idempotent per arm
--- via DELETE+INSERT, same convention as above.
+-- ONE-TIME MIGRATION REPAIR, NOT A RECURRING FIX (historical note):
+-- Early in the reviewer-response-r1 validation gate, S7a (chi-square
+-- class-prior shift) came out several orders of magnitude too large for
+-- arm='B'/'D'. Root cause: the legacy flat tables migrated into the new
+-- unified `predictions` table (predictions_arm_b / predictions_arm_d) only
+-- ever held the measurement window (35-89) for those arms - their
+-- calibration window (15-34) was never captured in a retained table. So
+-- `predictions` had zero calibration-window rows for arm B/D immediately
+-- after migration, ref_priors' lookup for those arms missed on every
+-- label/day, and every term fell back to COALESCE(..., 1e-6), exploding the
+-- statistic. This was repaired ONCE, live, by copying BASE's existing
+-- `predictions` rows for day_index BETWEEN 15 AND 34 under arm labels 'B'
+-- and 'D' (valid because B/D's days 15-34 are byte-identical to BASE's -
+-- single-seed design, README.md Section 2) - zero additional Cortex cost.
 --
--- This block is NOT needed once a given arm is a true independent replicate
--- (e.g. B_s01 with its own seed) - at that point run the AI_CLASSIFY block
--- above directly for that arm/label instead, since its days 15-34 are no
--- longer identical to BASE's.
-DELETE FROM DT_STUDY.DRIFT.predictions_calibration WHERE arm = 'B';
-INSERT INTO DT_STUDY.DRIFT.predictions_calibration
-SELECT 'B' AS arm, day_index, record_id, true_label, predicted_label, predicted_label_norm
-FROM DT_STUDY.DRIFT.predictions_calibration
-WHERE arm = 'BASE';
-
-DELETE FROM DT_STUDY.DRIFT.predictions_calibration WHERE arm = 'D';
-INSERT INTO DT_STUDY.DRIFT.predictions_calibration
-SELECT 'D' AS arm, day_index, record_id, true_label, predicted_label, predicted_label_norm
-FROM DT_STUDY.DRIFT.predictions_calibration
-WHERE arm = 'BASE';
+-- This is NOT a block to re-run as part of this script, and it is NOT
+-- needed for a from-scratch reproduction: Section 4 of drift_signals.sql
+-- classifies `day_index >= 15` per arm, so a fresh run for any arm already
+-- produces its own complete calibration + measurement rows in `predictions`
+-- in one pass, with no gap to patch. It was only the one-time legacy-table
+-- migration that created the gap this repaired.

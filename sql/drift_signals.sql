@@ -773,8 +773,9 @@ ORDER BY 1, 2, 3;
 -- data, so they should match exactly once Arm D's duplicate rows are fixed
 -- (Section 1 dedupe). S7a depends on predicted_label_norm matching the legacy
 -- column exactly, which this file's Section 4 CASE expression is written to
--- reproduce, and on predictions_calibration having rows for arm B/D, which
--- requires the calibration-sharing fix in classify_calibration.sql.
+-- reproduce, and on DT_STUDY.DRIFT.predictions (which ref_priors reads,
+-- NOT predictions_calibration) having calibration-window rows for arm B/D -
+-- see the migration-repair note in classify_calibration.sql.
 --
 -- VALIDATED 2026-11-01: ran clean on live data - S1, S2, S3, S4, S5, S7a
 -- (arm B), S1, S2, S3, S7a (arm D) matched the legacy tables to
