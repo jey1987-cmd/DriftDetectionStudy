@@ -72,11 +72,27 @@ AI_CLASSIFY_CREDITS_PER_MILLION_TOKENS = 1.62
 AI_CREDIT_PRICE_USD_GLOBAL = 2.00
 AI_CREDIT_PRICE_USD_REGIONAL = 2.20
 
+# RENAMED PAIR (2026-11-01): must match classify_calibration.sql /
+# drift_signals.sql Section 4 exactly - those are what actually produced the
+# live predictions tables (verified against QUERY_HISTORY). The original
+# 'noise_complaint'/'construction_complaint' strings were never what ran.
 BARE_LABELS = (
-    "['pothole_road','streetlight_outage','noise_complaint',"
-    "'construction_complaint','illegal_dumping','overflowing_bin',"
+    "['pothole_road','streetlight_outage',"
+    "'noise_disturbance_non_construction','construction_site_disturbance',"
+    "'illegal_dumping','overflowing_bin',"
     "'graffiti','park_maintenance','water_leak','stray_animal']"
 )
+
+# predicted_label_norm maps the two renamed labels back into true_label's
+# vocabulary - see classify_calibration.sql's header for the full
+# explanation. Every table this script writes to has this column; every
+# INSERT below must populate it.
+LABEL_NORM_CASE = """
+       CASE predicted_label
+           WHEN 'noise_disturbance_non_construction' THEN 'noise_complaint'
+           WHEN 'construction_site_disturbance' THEN 'construction_complaint'
+           ELSE predicted_label
+       END AS predicted_label_norm"""
 
 # Mirrors classify_calibration.sql exactly - do not let these two drift apart.
 DESCRIBED_LABELS = """[
@@ -111,16 +127,21 @@ STEP_CONFIG = {
         "create_ddl": """
             CREATE TABLE IF NOT EXISTS DT_STUDY.DRIFT.predictions_calibration (
                 arm STRING, day_index INT, record_id STRING,
-                true_label STRING, predicted_label STRING
+                true_label STRING, predicted_label STRING,
+                predicted_label_norm STRING
             )""",
     },
     "predictions": {
-        "table": "DT_STUDY.FEAT.predictions",
+        # FIXED (2026-11-01): DT_STUDY.FEAT never existed in this account
+        # (confirmed via SHOW SCHEMAS) - the real table drift_signals.sql
+        # Section 4 / ref_priors use is DT_STUDY.DRIFT.predictions.
+        "table": "DT_STUDY.DRIFT.predictions",
         "day_filter": "day_index >= 15",
         "create_ddl": """
-            CREATE TABLE IF NOT EXISTS DT_STUDY.FEAT.predictions (
+            CREATE TABLE IF NOT EXISTS DT_STUDY.DRIFT.predictions (
                 arm STRING, day_index INT, record_id STRING,
-                true_label STRING, predicted_label STRING
+                true_label STRING, predicted_label STRING,
+                predicted_label_norm STRING
             )""",
     },
 }
@@ -179,6 +200,24 @@ def cmd_history(args) -> None:
         conn.close()
 
 
+# SCRATCH TABLE (2026-11-01): --mode measure never writes to the live
+# predictions/predictions_calibration tables. An August 21 overwrite of the
+# live calibration table is what destroyed the original run this study's
+# published numbers came from - AI_CLASSIFY is not guaranteed to return
+# identical labels on a re-run, so even a "replace 50 rows with equivalent
+# rows" measurement could nudge the calibration mean/stdev. A measurement
+# only needs real billed AI_CLASSIFY calls and a token count back from
+# CORTEX_AI_FUNCTIONS_USAGE_HISTORY - it has no reason to touch real data,
+# and now it never does.
+SCRATCH_TABLE = "DT_STUDY.DRIFT.MEASURE_SCRATCH"
+SCRATCH_DDL = f"""
+    CREATE TABLE IF NOT EXISTS {SCRATCH_TABLE} (
+        arm STRING, day_index INT, record_id STRING,
+        true_label STRING, predicted_label STRING,
+        predicted_label_norm STRING, query_tag STRING
+    )"""
+
+
 def cmd_measure(args) -> None:
     cfg = STEP_CONFIG[args.step]
     labels_literal = BARE_LABELS if args.labels == "bare" else DESCRIBED_LABELS
@@ -187,6 +226,8 @@ def cmd_measure(args) -> None:
     print_estimate(
         f"WORST-CASE ceiling for this {args.limit}-call test "
         f"({args.labels} labels)", worst_case)
+    print(f"\n  writes to {SCRATCH_TABLE} only - {cfg['table']} (the live "
+          f"table) is never touched by --mode measure.")
 
     if not args.confirm:
         print("\nDRY RUN - this would execute real, billed AI_CLASSIFY calls. "
@@ -198,32 +239,29 @@ def cmd_measure(args) -> None:
     tag = f"driftstudy-measure-{args.step}-{args.labels}-{int(time.time())}"
     try:
         cur.execute(f"ALTER SESSION SET QUERY_TAG = '{tag}'")
-        cur.execute(cfg["create_ddl"])
-        cur.execute(
-            f"DELETE FROM {cfg['table']} WHERE arm = %(arm)s "
-            f"AND record_id IN ("
-            f"  SELECT record_id FROM DT_STUDY.DRIFT.daily_records "
-            f"  WHERE arm = %(arm)s AND {cfg['day_filter']} "
-            f"  ORDER BY HASH(record_id) LIMIT {args.limit})",
-            {"arm": args.arm},
-        )
+        cur.execute(SCRATCH_DDL)
         cur.execute(
             f"""
-            INSERT INTO {cfg['table']}
-            SELECT arm, day_index, record_id, true_label,
-                   AI_CLASSIFY(text, {labels_literal}):labels[0]::VARCHAR AS predicted_label
+            INSERT INTO {SCRATCH_TABLE}
+            SELECT arm, day_index, record_id, true_label, predicted_label,
+                   {LABEL_NORM_CASE}, '{tag}' AS query_tag
             FROM (
-                SELECT arm, day_index, record_id, true_label, text
-                FROM DT_STUDY.DRIFT.daily_records
-                WHERE arm = %(arm)s AND {cfg['day_filter']}
-                ORDER BY HASH(record_id)
-                LIMIT {args.limit}
+                SELECT arm, day_index, record_id, true_label,
+                       AI_CLASSIFY(text, {labels_literal}):labels[0]::VARCHAR AS predicted_label
+                FROM (
+                    SELECT arm, day_index, record_id, true_label, text
+                    FROM DT_STUDY.DRIFT.daily_records
+                    WHERE arm = %(arm)s AND {cfg['day_filter']}
+                    ORDER BY HASH(record_id)
+                    LIMIT {args.limit}
+                )
             )
             """,
             {"arm": args.arm},
         )
         conn.commit()
-        print(f"\nran {args.limit} real AI_CLASSIFY calls, tagged '{tag}'.")
+        print(f"\nran {args.limit} real AI_CLASSIFY calls into {SCRATCH_TABLE}, "
+              f"tagged '{tag}'. Live tables untouched.")
         print("ACCOUNT_USAGE lags up to ~3 hours - once it's available, run:\n")
         print(f"""  SELECT query_id,
          SUM(m.value:value::NUMBER) AS total_tokens,
@@ -322,10 +360,14 @@ def cmd_run(args) -> None:
         cur.execute(
             f"""
             INSERT INTO {cfg['table']}
-            SELECT arm, day_index, record_id, true_label,
-                   AI_CLASSIFY(text, {labels_literal}):labels[0]::VARCHAR AS predicted_label
-            FROM DT_STUDY.DRIFT.daily_records
-            WHERE arm = %(arm)s AND {cfg['day_filter']}
+            SELECT arm, day_index, record_id, true_label, predicted_label,
+                   {LABEL_NORM_CASE}
+            FROM (
+                SELECT arm, day_index, record_id, true_label,
+                       AI_CLASSIFY(text, {labels_literal}):labels[0]::VARCHAR AS predicted_label
+                FROM DT_STUDY.DRIFT.daily_records
+                WHERE arm = %(arm)s AND {cfg['day_filter']}
+            )
             """,
             {"arm": args.arm},
         )
