@@ -243,13 +243,22 @@ WHERE rn <= 200;
 
 -- Embed once, reuse for S4/S5/S6.  Stored as ARRAY so element-wise aggregation
 -- is possible; Snowflake has no AVG() over VECTOR.
+--
+-- CAST FIX (2026-11-01): EMBED_TEXT_768 returns VECTOR(FLOAT, 768), not
+-- ARRAY. Inserting it into an ARRAY column without an explicit cast fails
+-- with "Expression type does not match column data type, expecting ARRAY
+-- but got VECTOR(FLOAT, 768)" - confirmed live running this for arm
+-- BASE/C/D. Arm B's embeddings (already in this table) predate this bug
+-- being noticed; whatever query actually produced them must have had the
+-- cast or an equivalent, since the table itself is schema ARRAY and already
+-- holds rows.
 CREATE TABLE IF NOT EXISTS DT_STUDY.DRIFT.embeddings (
     arm STRING, day_index INT, record_id STRING, emb ARRAY
 );
 DELETE FROM DT_STUDY.DRIFT.embeddings WHERE arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.embeddings
 SELECT arm, day_index, record_id,
-       SNOWFLAKE.CORTEX.EMBED_TEXT_768('snowflake-arctic-embed-m', text) AS emb
+       SNOWFLAKE.CORTEX.EMBED_TEXT_768('snowflake-arctic-embed-m', text)::ARRAY AS emb
 FROM DT_STUDY.DRIFT.daily_sample
 WHERE arm = '<ARM>';
 
