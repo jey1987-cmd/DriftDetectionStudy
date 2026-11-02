@@ -760,10 +760,21 @@ FROM DT_STUDY.DRIFT.signal_daily s
 JOIN DT_STUDY.DRIFT.s6_arm_b l ON l.day_index = s.day_index
 WHERE s.arm = 'B' AND s.signal = 'S6' AND s.strategy = 'FIXED'
 UNION ALL
-SELECT 'S3', 'D', s.day_index, s.statistic, l.statistic, ABS(s.statistic - l.statistic)
+-- CORRECTION (2026-11-01, same day): this previously read 'S3', 'D' joined
+-- to s3_arm_d - that table never existed (confirmed via SHOW TABLES:
+-- D only has legacy S1_ARM_D, S2_ARM_D, S7A_ARM_D; no S3/S4/S5/S6_ARM_D was
+-- ever computed, consistent with the long-standing "Arm D has no S3-S6"
+-- finding). That line would error the moment this query actually ran - it
+-- never had been. Replaced with the two real, uncross-checked D tables.
+SELECT 'S1', 'D', s.day_index, s.statistic, l.statistic, ABS(s.statistic - l.statistic)
 FROM DT_STUDY.DRIFT.signal_daily s
-JOIN DT_STUDY.DRIFT.s3_arm_d l ON l.day_index = s.day_index
-WHERE s.arm = 'D' AND s.signal = 'S3' AND s.strategy = 'FIXED'
+JOIN DT_STUDY.DRIFT.s1_arm_d l ON l.day_index = s.day_index
+WHERE s.arm = 'D' AND s.signal = 'S1' AND s.strategy = 'FIXED'
+UNION ALL
+SELECT 'S2', 'D', s.day_index, s.statistic, l.statistic, ABS(s.statistic - l.statistic)
+FROM DT_STUDY.DRIFT.signal_daily s
+JOIN DT_STUDY.DRIFT.s2_arm_d l ON l.day_index = s.day_index
+WHERE s.arm = 'D' AND s.signal = 'S2' AND s.strategy = 'FIXED'
 UNION ALL
 SELECT 'S7a', 'B', s.day_index, s.statistic, l.statistic, ABS(s.statistic - l.statistic)
 FROM DT_STUDY.DRIFT.signal_daily s
@@ -786,8 +797,11 @@ ORDER BY 1, 2, 3;
 -- NOT predictions_calibration) having calibration-window rows for arm B/D -
 -- see the migration-repair note in classify_calibration.sql.
 --
--- VALIDATED 2026-11-01: ran clean on live data - S1, S2, S3, S4, S5, S7a
--- (arm B), S1, S2, S3, S7a (arm D) matched the legacy tables to
--- floating-point precision (diffs ~1e-15 to 1e-17); S6 (arm B) diverged only
--- in the reference window, confirming the self-match artifact above rather
--- than a new bug.
+-- VALIDATED 2026-11-01 (re-run after the S3/D correction above): ran clean
+-- on live data - S1, S2, S3, S4, S5, S7a (arm B) and S1, S2, S7a (arm D)
+-- matched the legacy tables to floating-point precision (diffs ~1e-15 to
+-- 1e-18); S6 (arm B) diverged only in the reference window, confirming the
+-- self-match artifact above rather than a new bug. Arm D has no legacy
+-- S3/S4/S5/S6 table to check against (never computed historically), so
+-- those signals for D rest on the same pure-SQL/embedding logic validated
+-- against arm B, not an independent cross-check of their own.
