@@ -49,7 +49,12 @@ ARMS = ["BASE", "A", "B", "C", "D", "E"]
 # "BASE_s10") - any of the base ARMS followed by an optional "_s<digits>" seed
 # suffix. Previously restricted to the fixed ARMS list, which rejected every
 # replicate label by construction.
-ARM_RE = re.compile(r"^(?:%s)(?:_s\d+)?$" % "|".join(ARMS))
+#
+# Also accepts "_ext<digits>" (e.g. "D_ext150"), generate_311_corpus.py's
+# --days extended-window test for the same seed (same corpus through day 89,
+# more days appended) - a different thing from a replicate seed, which is
+# why it gets its own suffix rather than overloading "_s".
+ARM_RE = re.compile(r"^(?:%s)(?:_s\d+|_ext\d+)?$" % "|".join(ARMS))
 
 
 def _valid_arm(value: str) -> str:

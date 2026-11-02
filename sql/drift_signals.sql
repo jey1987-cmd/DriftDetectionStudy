@@ -539,11 +539,21 @@ GROUP BY 1,2;
 -- signal_fired and detection_summary below both read FROM signal_daily, but
 -- nothing in this file ever inserted the Tier 1/2/3 views' output into it -
 -- every view above is fully specified, this section only wires it into the
--- results table, no new statistic logic. Re-runnable: each block deletes its
--- own (signal, strategy) rows first, matching this file's existing pattern of
--- fully recomputing derived tables from whatever is currently in
--- daily_records (see tokens/daily_sample/embeddings/predictions above), so
--- re-running after loading another arm or replicate is safe, not additive.
+-- results table, no new statistic logic.
+--
+-- RESCOPED TO '<ARM>' (2026-11-01): this was previously a single global
+-- DELETE+INSERT per signal, unscoped by arm - inconsistent with every other
+-- section's "'<ARM>'-scoped" convention, and it cost a live ~20-minute S6
+-- recompute (cancelled) just to add one new arm (D_ext150), because it
+-- recomputed S6's O(k*|ref|) pairwise distance for every arm already done,
+-- not just the new one. S6 is now safe to cancel mid-run without data loss
+-- (its own DELETE commits immediately - Snowflake's Python connector
+-- autocommits per statement by default - so a cancelled INSERT after it
+-- leaves that signal's rows empty for every arm, not just the new one,
+-- until it's re-run) but there is no reason to pay that cost at all when
+-- only one arm changed. Substitute '<ARM>' per this file's usual convention;
+-- re-running for an arm whose underlying tables haven't changed is still
+-- safe (same result), just no longer necessary.
 --
 -- STRATEGY GAP: DESIGN.md §4.3 calls for every signal under both FIXED and
 -- SLIDING (trailing 7-day) reference strategies. Only FIXED is implemented
@@ -551,36 +561,36 @@ GROUP BY 1,2;
 -- reference. Only 'FIXED' rows are inserted below; add the SLIDING views
 -- first if the response to reviewers needs that comparison.
 
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S1' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S1' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S1', 'FIXED', statistic FROM DT_STUDY.DRIFT.s1_ks_length;
+SELECT arm, day_index, 'S1', 'FIXED', statistic FROM DT_STUDY.DRIFT.s1_ks_length WHERE arm = '<ARM>';
 
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S2' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S2' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S2', 'FIXED', statistic FROM DT_STUDY.DRIFT.s2_vocab_novelty;
+SELECT arm, day_index, 'S2', 'FIXED', statistic FROM DT_STUDY.DRIFT.s2_vocab_novelty WHERE arm = '<ARM>';
 
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S3' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S3' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S3', 'FIXED', statistic FROM DT_STUDY.DRIFT.s3_ttr_shift;
+SELECT arm, day_index, 'S3', 'FIXED', statistic FROM DT_STUDY.DRIFT.s3_ttr_shift WHERE arm = '<ARM>';
 
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S4' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S4' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S4', 'FIXED', statistic FROM DT_STUDY.DRIFT.s4_centroid_shift;
+SELECT arm, day_index, 'S4', 'FIXED', statistic FROM DT_STUDY.DRIFT.s4_centroid_shift WHERE arm = '<ARM>';
 
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S5' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S5' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S5', 'FIXED', statistic FROM DT_STUDY.DRIFT.s5_mmd_linear;
+SELECT arm, day_index, 'S5', 'FIXED', statistic FROM DT_STUDY.DRIFT.s5_mmd_linear WHERE arm = '<ARM>';
 
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S6' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S6' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S6', 'FIXED', statistic FROM DT_STUDY.DRIFT.s6_nn_distance;
+SELECT arm, day_index, 'S6', 'FIXED', statistic FROM DT_STUDY.DRIFT.s6_nn_distance WHERE arm = '<ARM>';
 
 -- S7a only - this is the paid-classification-dependent signal (README §3.6).
 -- Run this block only for the arms/replicates whose predictions table you
 -- actually paid to build; it is a no-op (zero rows) for any arm without one.
-DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S7a' AND strategy = 'FIXED';
+DELETE FROM DT_STUDY.DRIFT.signal_daily WHERE signal = 'S7a' AND strategy = 'FIXED' AND arm = '<ARM>';
 INSERT INTO DT_STUDY.DRIFT.signal_daily
-SELECT arm, day_index, 'S7a', 'FIXED', statistic FROM DT_STUDY.DRIFT.s7a_prior_shift;
+SELECT arm, day_index, 'S7a', 'FIXED', statistic FROM DT_STUDY.DRIFT.s7a_prior_shift WHERE arm = '<ARM>';
 
 
 -- ============================================================================
