@@ -131,8 +131,11 @@ PURGE = FALSE
 def _connection_profile(name: str) -> dict:
     """Look up a named profile in ~/.snowflake/connections.toml (or
     $SNOWFLAKE_HOME/connections.toml). Only non-secret fields belong there -
-    account, user, role, warehouse, database, schema. Password/authenticator
-    always come from the environment, never from this file."""
+    account, user, role, warehouse, database, schema, and (for key-pair auth)
+    private_key_file, which is a FILE PATH, not a secret itself - the key
+    material it points to is a separate file with restricted permissions.
+    Password/passphrase always come from the environment, never from this
+    file."""
     import tomllib
 
     home = Path(os.environ.get("SNOWFLAKE_HOME", Path.home() / ".snowflake"))
@@ -165,16 +168,35 @@ def connect(connection_name: str | None = None):
             "connections.toml"
         )
 
-    return snowflake.connector.connect(
+    common = dict(
         account=account,
         user=user,
-        password=os.environ.get("SNOWFLAKE_PASSWORD") or profile.get("password"),
-        authenticator=os.environ.get("SNOWFLAKE_AUTHENTICATOR", "snowflake"),
         role=profile.get("role") or os.environ.get("SNOWFLAKE_ROLE"),
         warehouse=profile.get("warehouse", WAREHOUSE),
         database=profile.get("database", DATABASE),
         schema=profile.get("schema", SCHEMA),
         client_session_keep_alive=True,
+    )
+
+    # KEY-PAIR AUTH (2026-11-01): added so automated runs don't depend on an
+    # interactive Duo push being approved on every connection - password auth
+    # on study_v1 requires MFA, which blocked unattended/scripted runs.
+    # private_key_file is a path (not a secret) and belongs in
+    # connections.toml; the key file itself lives under ~/.snowflake/keys
+    # with 0600 permissions. SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is only needed
+    # if that key file is itself encrypted.
+    private_key_file = profile.get("private_key_file")
+    if private_key_file:
+        return snowflake.connector.connect(
+            private_key_file=str(Path(private_key_file).expanduser()),
+            private_key_file_pwd=os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
+            **common,
+        )
+
+    return snowflake.connector.connect(
+        password=os.environ.get("SNOWFLAKE_PASSWORD") or profile.get("password"),
+        authenticator=os.environ.get("SNOWFLAKE_AUTHENTICATOR", "snowflake"),
+        **common,
     )
 
 
@@ -186,6 +208,23 @@ def load(paths: list[Path], pause_seconds: float, connection_name: str | None) -
     try:
         cur.execute(f"USE WAREHOUSE {WAREHOUSE}")
         cur.execute(DDL_STAGE)
+
+        # IDEMPOTENCY FIX (2026-11-01): COPY INTO only ever appends. Running
+        # this loader twice for the same arm/label (e.g. a retried or
+        # re-triggered load) silently doubled every row - confirmed live on
+        # arm='D' in study_v1 (360,000 rows for 180,000 distinct record_ids).
+        # The arm/label is the parent directory name of each day file (see
+        # _find_day_files), which matches the 'arm' field generate_311_corpus.py
+        # writes into the file content. Clear each label's existing rows
+        # before reloading it, so re-running this loader for the same
+        # arm/label is a replace, not an append.
+        labels = sorted({p.parent.name for p in paths})
+        for label in labels:
+            cur.execute(
+                f"DELETE FROM {DATABASE}.{SCHEMA}.{TABLE} WHERE arm = %s", (label,)
+            )
+            print(f"  cleared existing rows for arm/label={label!r} "
+                  f"({cur.rowcount} rows deleted)", file=sys.stderr)
 
         for i, p in enumerate(paths, 1):
             cur.execute(
