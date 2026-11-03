@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -42,6 +43,27 @@ WAREHOUSE = "DT_TESTBED_WH"
 COLUMNS = ["record_id", "arm", "day_index", "text", "true_label"]
 
 ARMS = ["BASE", "A", "B", "C", "D", "E"]
+
+# Accepts a base arm on its own (e.g. "B") or a replicate label produced by
+# generate_311_corpus.py's --label / gen_replicates.py (e.g. "B_s01",
+# "BASE_s10") - any of the base ARMS followed by an optional "_s<digits>" seed
+# suffix. Previously restricted to the fixed ARMS list, which rejected every
+# replicate label by construction.
+#
+# Also accepts "_ext<digits>" (e.g. "D_ext150"), generate_311_corpus.py's
+# --days extended-window test for the same seed (same corpus through day 89,
+# more days appended) - a different thing from a replicate seed, which is
+# why it gets its own suffix rather than overloading "_s".
+ARM_RE = re.compile(r"^(?:%s)(?:_s\d+|_ext\d+)?$" % "|".join(ARMS))
+
+
+def _valid_arm(value: str) -> str:
+    if value == "all" or ARM_RE.match(value):
+        return value
+    raise argparse.ArgumentTypeError(
+        f"invalid arm '{value}': expected one of {ARMS}, 'all', or a "
+        f"replicate label like 'B_s01' (base arm + '_s' + seed index)"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -114,8 +136,11 @@ PURGE = FALSE
 def _connection_profile(name: str) -> dict:
     """Look up a named profile in ~/.snowflake/connections.toml (or
     $SNOWFLAKE_HOME/connections.toml). Only non-secret fields belong there -
-    account, user, role, warehouse, database, schema. Password/authenticator
-    always come from the environment, never from this file."""
+    account, user, role, warehouse, database, schema, and (for key-pair auth)
+    private_key_file, which is a FILE PATH, not a secret itself - the key
+    material it points to is a separate file with restricted permissions.
+    Password/passphrase always come from the environment, never from this
+    file."""
     import tomllib
 
     home = Path(os.environ.get("SNOWFLAKE_HOME", Path.home() / ".snowflake"))
@@ -148,16 +173,35 @@ def connect(connection_name: str | None = None):
             "connections.toml"
         )
 
-    return snowflake.connector.connect(
+    common = dict(
         account=account,
         user=user,
-        password=os.environ.get("SNOWFLAKE_PASSWORD") or profile.get("password"),
-        authenticator=os.environ.get("SNOWFLAKE_AUTHENTICATOR", "snowflake"),
         role=profile.get("role") or os.environ.get("SNOWFLAKE_ROLE"),
         warehouse=profile.get("warehouse", WAREHOUSE),
         database=profile.get("database", DATABASE),
         schema=profile.get("schema", SCHEMA),
         client_session_keep_alive=True,
+    )
+
+    # KEY-PAIR AUTH (2026-11-01): added so automated runs don't depend on an
+    # interactive Duo push being approved on every connection - password auth
+    # on study_v1 requires MFA, which blocked unattended/scripted runs.
+    # private_key_file is a path (not a secret) and belongs in
+    # connections.toml; the key file itself lives under ~/.snowflake/keys
+    # with 0600 permissions. SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is only needed
+    # if that key file is itself encrypted.
+    private_key_file = profile.get("private_key_file")
+    if private_key_file:
+        return snowflake.connector.connect(
+            private_key_file=str(Path(private_key_file).expanduser()),
+            private_key_file_pwd=os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE"),
+            **common,
+        )
+
+    return snowflake.connector.connect(
+        password=os.environ.get("SNOWFLAKE_PASSWORD") or profile.get("password"),
+        authenticator=os.environ.get("SNOWFLAKE_AUTHENTICATOR", "snowflake"),
+        **common,
     )
 
 
@@ -169,6 +213,23 @@ def load(paths: list[Path], pause_seconds: float, connection_name: str | None) -
     try:
         cur.execute(f"USE WAREHOUSE {WAREHOUSE}")
         cur.execute(DDL_STAGE)
+
+        # IDEMPOTENCY FIX (2026-11-01): COPY INTO only ever appends. Running
+        # this loader twice for the same arm/label (e.g. a retried or
+        # re-triggered load) silently doubled every row - confirmed live on
+        # arm='D' in study_v1 (360,000 rows for 180,000 distinct record_ids).
+        # The arm/label is the parent directory name of each day file (see
+        # _find_day_files), which matches the 'arm' field generate_311_corpus.py
+        # writes into the file content. Clear each label's existing rows
+        # before reloading it, so re-running this loader for the same
+        # arm/label is a replace, not an append.
+        labels = sorted({p.parent.name for p in paths})
+        for label in labels:
+            cur.execute(
+                f"DELETE FROM {DATABASE}.{SCHEMA}.{TABLE} WHERE arm = %s", (label,)
+            )
+            print(f"  cleared existing rows for arm/label={label!r} "
+                  f"({cur.rowcount} rows deleted)", file=sys.stderr)
 
         for i, p in enumerate(paths, 1):
             cur.execute(
@@ -205,8 +266,9 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--corpus-dir", type=Path, default=Path("./corpus"),
                     help="root directory passed as --out to Corpus_Generator.py")
-    ap.add_argument("--arm", default="BASE", choices=ARMS + ["all"],
-                    help="arm subdirectory to load, or 'all' for every arm found")
+    ap.add_argument("--arm", default="BASE", type=_valid_arm,
+                    help="arm subdirectory to load, 'all' for every arm "
+                         "found, or a replicate label like 'B_s01'")
     ap.add_argument("--check", action="store_true",
                     help="validate the jsonl files locally, do not connect to Snowflake")
     ap.add_argument("--pause", type=float, default=0.0,

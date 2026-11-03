@@ -14,7 +14,7 @@
 
 Companion repository for:
 
-> **What Kind of Drift Determines Which Signal Sees It: A Cost-Normalized,
+> **What Kind of Drift Determines Which Signal Sees It: A Cost-Aware,
 > Three-Arm Study of Text Classification Monitoring**
 > J. Ramalingam, submitted to IEEE Access.
 
@@ -225,6 +225,6 @@ If you use this code or corpus generator, please cite:
 
 ```
 J. Ramalingam, "What Kind of Drift Determines Which Signal Sees It:
-A Cost-Normalized, Three-Arm Study of Text Classification Monitoring,"
+A Cost-Aware, Three-Arm Study of Text Classification Monitoring,"
 IEEE Access, [year, volume, pages once assigned].
 ```
