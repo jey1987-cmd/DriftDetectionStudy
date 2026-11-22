@@ -1,0 +1,8 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "DriftDetectionStudy: Reproducibility Package"
+authors:
+  - family-names: Ramalingam
+    given-names: Jeyaraman
+license: MIT
+repository-code: "https://github.com/jey1987-cmd/DriftDetectionStudy"
