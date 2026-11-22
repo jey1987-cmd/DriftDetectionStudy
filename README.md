@@ -92,8 +92,9 @@ warehouse (≈3.7 hours wall clock).
 Tier 1 and Tier 2 signals alone (no classification, no S7a) reproduce the
 paper's central finding — that new-content drift is detected by most
 structural/embedding signals regardless of prevalence, while reassignment
-drift is caught only by nearest-neighbor distance and classifier output —
-at a cost of well under $1.
+drift (Arm D) is not detected by any of them. Detecting it needed the
+classifier-output signal S7a at 2,000 records a day (about $87 per arm) or a
+true-label accuracy monitor. Tier 1 and 2 signals alone cost well under $1.
 
 ---
 
@@ -293,7 +294,7 @@ Input is a CSV export of `signal_daily` restricted to `day_index BETWEEN
 
 ## 4. Expected results (single realization per arm)
 
-| Signal | Arm B (100%) | Arm C (≈15%) | Arm D (≤30%) |
+| Signal | Arm B (100%) | Arm C (≈15%) | Arm D (30% substitution ceiling, ≈13% of records) |
 |---|---|---|---|
 | S1 | not detected | not detected | not detected |
 | S2 | 1 day | 1 day | not detected |
@@ -372,13 +373,14 @@ python python/analyze_replicates.py detections.csv --out table6 --latex
 | D | S4, S5 | 1/10 | 32d (single realization, days 67–68) |
 | D | S6 | 1/10 | 50d (single realization, day 85, 0.84% over threshold) |
 
-**Stationary control vs. Arm D's occasional events.** Pooling all six
-Tier 1/2 signals, the control produced 1 false alarm in 60 signal-realizations
-(550 signal-days each); Arm D produced 3 (S4, S5, S6 — S4/S5 fired together
-in the same realization, so they are not independent events). A two-sided
-Fisher exact test on [[1,59],[3,57]] gives **p ≈ 0.62**: Arm D's occasional
-S4–S6 events are not statistically distinguishable from the stationary
-false-alarm rate.
+**Stationary control vs. Arm D's occasional events.** Arm D's occasional
+S4–S6 events (S4/S5 fired together in the same realization, so they are not
+independent) cannot be distinguished from the stationary false-alarm rate.
+With each rule calibrated on the 11 stationary series to a common false-alarm
+rate (about one alarm per 585 signal-days: one-day limit 4.05, CUSUM k=0.5
+h=12.7, EWMA λ=0.2 L=4.65), Arm D is detected by S1 and S3–S6 in 0–3 of 11
+series against 0–2 of 11 for the control, while S3–S6 detect Arms B and C in
+11 of 11. See the manuscript's Tables 8–10.
 
 **Extended window (`D_ext150`, one realization, 150 days).** Arm D's
 substitution rate reaches its ceiling on day 75; a single realization was

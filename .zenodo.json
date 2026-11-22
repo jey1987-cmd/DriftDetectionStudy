@@ -1,0 +1,9 @@
+{
+  "title": "DriftDetectionStudy: Reproducibility Package",
+  "upload_type": "software",
+  "creators": [
+    { "name": "Ramalingam, Jeyaraman", "orcid": "0009-0000-8888-9761" }
+  ],
+  "license": "MIT",
+  "access_right": "open"
+}
