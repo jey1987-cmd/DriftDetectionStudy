@@ -4,5 +4,6 @@ title: "DriftDetectionStudy: Reproducibility Package"
 authors:
   - family-names: Ramalingam
     given-names: Jeyaraman
+    orcid: "https://orcid.org/0009-0000-8888-9761"
 license: MIT
 repository-code: "https://github.com/jey1987-cmd/DriftDetectionStudy"
