@@ -7,8 +7,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.9%2B-4a5261?style=flat-square" alt="Python 3.9+">
   <img src="https://img.shields.io/badge/Snowflake-Cortex%20AI-4a5261?style=flat-square" alt="Snowflake Cortex AI">
-  <img src="https://img.shields.io/badge/IEEE%20Access-submitted-4a5261?style=flat-square" alt="IEEE Access: submitted">
-  <img src="https://img.shields.io/badge/reproduction-~%24250-4a5261?style=flat-square" alt="Full reproduction cost ~$250">
+  <img src="https://img.shields.io/badge/PeerJ-submitted-4a5261?style=flat-square" alt="PeerJ: submitted">
   <img src="https://img.shields.io/badge/corpus-synthetic-4a5261?style=flat-square" alt="Corpus: synthetic">
 </p>
 
@@ -16,7 +15,7 @@ Companion repository for:
 
 > **What Kind of Drift Determines Which Signal Sees It: A Cost-Aware,
 > Three-Arm Study of Text Classification Monitoring**
-> J. Ramalingam, submitted to IEEE Access.
+> J. Ramalingam, submitted to PeerJ.
 
 This repository contains the corpus generator, detection-signal SQL, the
 cost-gated runners used to reproduce every paid step, the multi-seed
@@ -73,7 +72,6 @@ current Snowflake AI pricing before running):**
 | Calibration classification (40,000 calls, shared across B/D) | ~$26 |
 | Each arm's measurement-window classification (110,000 calls) | ~$74 |
 | All Tier 1 (SQL) and Tier 2 (embedding) signals, all arms combined | < $1 |
-| **Single-run, three-arm reproduction (B, C, D)** | **~$250** |
 | + Arm C's own 11-label calibration pass (40,000 calls, required — see 3.3) | **+~$32** |
 
 A full re-run while preparing the R1 response (BASE S7a rerun, Arm C's
@@ -420,5 +418,5 @@ If you use this code or corpus generator, please cite:
 ```
 J. Ramalingam, "What Kind of Drift Determines Which Signal Sees It:
 A Cost-Aware, Three-Arm Study of Text Classification Monitoring,"
-IEEE Access, [year, volume, pages once assigned].
+PeerJ, [year, volume, pages once assigned].
 ```
